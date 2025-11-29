@@ -18,7 +18,6 @@ export interface SendOptions {
   insecure?: boolean;
   json?: boolean;
   jsonl?: boolean;
-  junit?: boolean;
   output?: OutputType;
   outputFailed?: OutputType;
   raw?: boolean;
@@ -35,7 +34,7 @@ export interface SendOptions {
 }
 
 export function getLogLevel(cliOptions: SendOptions): LogLevel | undefined {
-  if (cliOptions.json || cliOptions.junit || cliOptions.jsonl) {
+  if (cliOptions.json || cliOptions.jsonl) {
     return LogLevel.none;
   }
   if (cliOptions.silent) {

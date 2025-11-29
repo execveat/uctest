@@ -2,7 +2,7 @@ import { createReadStream, promises as fs } from 'fs';
 import { EOL } from 'os';
 import { dirname, extname, isAbsolute, join } from 'path';
 
-import { fileProvider, log, userInteractionProvider } from '../io';
+import { fileProvider, userInteractionProvider } from '../io';
 import * as models from '../models';
 
 export async function initIOProvider(): Promise<void> {
@@ -130,20 +130,10 @@ async function initUserInteractionProvider() {
     return answer.placeholder;
   };
   userInteractionProvider.getClipboard = async function getClipboard() {
-    try {
-      const clipboard = await import('clipboardy');
-      return await clipboard.default.read();
-    } catch (err) {
-      log.warn(err);
-      return '';
-    }
+    // Clipboard not supported in uctest CLI
+    return '';
   };
-  userInteractionProvider.setClipboard = async function setClipboard(message: string) {
-    try {
-      const clipboard = await import('clipboardy');
-      await clipboard.default.write(message);
-    } catch (err) {
-      log.warn(err);
-    }
+  userInteractionProvider.setClipboard = async function setClipboard(_message: string) {
+    // Clipboard not supported in uctest CLI
   };
 }

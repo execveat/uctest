@@ -12,7 +12,6 @@ import * as utils from '../../utils';
 import { toSendJsonOutput, toSendOutputRequest } from './jsonOutput';
 import { getLogLevel, OutputType, SendFilterOptions, SendOptions } from './options';
 import { createCliPluginRegister } from './plugin';
-import { transformToJunit } from './junitUtils';
 import { SelectActionResult, selectHttpFiles } from './selectHttpFiles';
 
 export function sendCommand() {
@@ -28,7 +27,6 @@ export function sendCommand() {
     .option('-i --interactive', 'do not exit the program after request, go back to selection')
     .option('--json', 'use json output')
     .option('--jsonl', 'stream json lines output')
-    .option('--junit', 'use junit xml output')
     .option('-l, --line <line>', 'line of the http requests')
     .option(
       '-n, --name <name>',
@@ -107,7 +105,7 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
         const sendFuncs = selection.map(
           ({ httpFile, httpRegions }) =>
             async function sendHttpFile() {
-              if (!options.junit && !options.json && context.scriptConsole && selection.length > 1) {
+              if (!options.json && context.scriptConsole && selection.length > 1) {
                 context.scriptConsole.info(`--------------------- ${httpFile.fileName}  --`);
               }
               await send(Object.assign({}, context, { httpFile, httpRegions }));
@@ -160,8 +158,6 @@ function reportOutput(context: Omit<models.HttpFileSendContext, 'httpFile'>, opt
   const cliJsonOutput = toSendJsonOutput(processedHttpRegions, options);
   if (options.json) {
     console.info(utils.stringifySafe(cliJsonOutput, 2));
-  } else if (options.junit) {
-    console.info(transformToJunit(cliJsonOutput));
   } else if (context.scriptConsole) {
     context.scriptConsole.info('');
 
@@ -495,7 +491,7 @@ export function initRequestLogger(cliOptions: SendOptions, context: Omit<models.
   });
   scriptConsole.collectMessages();
   context.scriptConsole = scriptConsole;
-  if (!cliOptions.json && !cliOptions.junit) {
+  if (!cliOptions.json) {
     context.logStream = getStreamLogger(cliOptions);
     const logger = getRequestLogger(cliOptions, context.config, scriptConsole);
     context.logResponse = async (response, httpRegion) => {

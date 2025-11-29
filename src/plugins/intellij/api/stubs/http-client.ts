@@ -5,7 +5,6 @@
 
 import { CommonHttpClient, CommonHttpClientRequest, CommonRequestHeader } from './http-client.common';
 import { PreRequestRequestHeader } from './http-client.pre-request';
-import { Document } from '@xmldom/xmldom';
 // declare const request: HttpClientFinalRequest;
 
 export interface HttpClient extends CommonHttpClient {
@@ -35,7 +34,7 @@ export interface TextStreamResponse {
    * @param onFinish function to be called after the end of the stream
    */
   onEachLine(
-    subscriber: (line: string | Document | object, unsubscribe: () => void) => void,
+    subscriber: (line: string | object, unsubscribe: () => void) => void,
     onFinish?: () => void
   ): void;
 
@@ -48,7 +47,7 @@ export interface TextStreamResponse {
    */
   onEachMessage(
     subscriber: (
-      message: string | Document | object,
+      message: string | object,
       unsubscribe: () => void,
       output?: (answer: string) => void
     ) => void,
@@ -63,7 +62,7 @@ export interface HttpResponse {
   /**
    * Response content, it is a string or JSON object if response content-type is json.
    */
-  body: string | TextStreamResponse | Document | unknown;
+  body: string | TextStreamResponse | unknown;
 
   /**
    * Response headers storage.
