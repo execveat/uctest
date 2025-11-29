@@ -6,7 +6,7 @@ export type OutputType = 'body' | 'headers' | 'response' | 'none' | 'short' | 'e
 export interface SendOptions {
     env?: Array<string>;
     all?: boolean;
-    bail?: boolean;
+    keepGoing?: boolean;
     filter?: SendFilterOptions;
     help?: boolean;
     line?: number;

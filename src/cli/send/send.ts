@@ -15,12 +15,12 @@ import { createCliPluginRegister } from './plugin';
 import { SelectActionResult, selectHttpFiles } from './selectHttpFiles';
 
 export function sendCommand() {
-  const program = new Command('send')
-    .description('Run HTTP spec tests with smart filtering')
+  const program = new Command('uctest')
+    .description('HTTP test runner for Unsafe Code Lab')
     .usage('[@tag...] [:name...] [path...] [options]')
     .argument('[args...]', 'Tags (@tag), names (:name), and paths')
     .option('-a, --all', 'run ALL tests (ignore default @ci tag filter)')
-    .option('-B, --no-bail', 'run all tests even after failure (default: stop on first)')
+    .option('-k, --keep-going', 'continue running after failures (default: stop on first)')
     .option('-e, --env  <env...>', 'list of environments')
     .option('--filter <filter>', 'filter requests output (only-failed)')
     .option('--insecure', 'allow insecure server connections when using ssl')
@@ -29,10 +29,11 @@ export function sendCommand() {
     .option('--jsonl', 'stream json lines output')
     .option('-l, --line <line>', 'line of the http requests')
     .option('--no-color', 'disable color support')
-    .option('-o, --output <output>', 'output format of response (short, body, headers, response, exchange, none)')
+    .option('-o, --output <output>', 'output format of response (short, body, headers, response, exchange, none)', 'none')
     .option(
       '--output-failed <output>',
-      'output format of failed response (short, body, headers, response, exchange, none)'
+      'output format of failed response (short, body, headers, response, exchange, none)',
+      'exchange'
     )
     .option('--raw', 'prevent formatting of response body')
     .option('--quiet', '')
@@ -101,13 +102,12 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
   // Default paths to current directory if none specified
   const fileNames = parsed.paths.length > 0 ? parsed.paths : ['./**/*.http'];
 
-  // bail is ON by default (Commander's --no-bail sets it to false)
-  // When bail is undefined (not explicitly set), treat as true (enabled)
-  const bailEnabled = options.bail !== false;
-  options.bail = bailEnabled;
+  // bail (stop on first failure) is ON by default
+  // When keepGoing is true, bail is disabled
+  const bailEnabled = !options.keepGoing;
 
   const context = convertCliOptionsToContext(options);
-  const { httpFiles, config } = await getHttpFiles(fileNames, options, context.config || {});
+  const { httpFiles, config } = await getHttpFiles(fileNames, bailEnabled, context.config || {});
   context.config = config;
   initRequestLogger(options, context);
 
@@ -168,7 +168,7 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
 
         const processedHttpRegions = context.processedHttpRegions || [];
         const firstFailed =
-          options.resume && options.bail ? findFirstFailedRegion(processedHttpRegions) : undefined;
+          options.resume && bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
 
         if (options.jsonl) {
           emittedRequests = emitRemainingJsonLines(
@@ -189,7 +189,7 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
           reportOutput(context, options);
         }
 
-        if (resumeStateFile && options.resume && options.bail) {
+        if (resumeStateFile && options.resume && bailEnabled) {
           if (firstFailed) {
             await saveResumeState(resumeStateFile, firstFailed);
           } else {
@@ -556,10 +556,10 @@ export function initRequestLogger(cliOptions: SendOptions, context: Omit<models.
   }
 }
 
-async function getHttpFiles(fileNames: Array<string>, options: SendOptions, config: models.EnvironmentConfig) {
+async function getHttpFiles(fileNames: Array<string>, bailEnabled: boolean, config: models.EnvironmentConfig) {
   const httpFiles: models.HttpFile[] = [];
   const httpFileStore = new HttpFileStore({
-    cli: createCliPluginRegister(!!options.bail),
+    cli: createCliPluginRegister(bailEnabled),
   });
 
   const parseOptions: models.HttpFileStoreOptions = {

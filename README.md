@@ -29,7 +29,7 @@ uctest [@tag...] [:name...] [path...] [options]
 | Option | Description |
 |--------|-------------|
 | `-a, --all` | Run ALL tests (ignore default @ci tag filter) |
-| `-B, --no-bail` | Run all tests even after failure (default: stop on first) |
+| `-k, --keep-going` | Continue running after failures (default: stop on first) |
 | `-r, --resume` | Resume from last failed request |
 | `--jsonl` | Stream JSON lines output (for CI/CD) |
 | `-v, --verbose` | Make the operation more talkative |
@@ -42,7 +42,7 @@ uctest @v301              # Run tests tagged 'v301'
 uctest @v301 @ci          # Run tests with BOTH tags (AND logic)
 uctest :checkout          # Run test named 'checkout'
 uctest orders/refund      # Run tests in specific path
-uctest -B                 # Run all @ci tests without stopping
+uctest -k                 # Run all @ci tests without stopping on failure
 uctest -r                 # Resume from last failure
 uctest -a spec/v301       # Run ALL tests in path (no tag filter)
 ```

@@ -1,4 +1,3 @@
-import { Command } from 'commander';
 import { join } from 'path';
 
 import * as utils from '../utils';
@@ -6,12 +5,9 @@ import { initIOProvider } from './initCliProvider';
 import { sendCommand } from './send';
 
 export async function createProgram() {
-  const program = new Command();
   const packageJson = await utils.parseJson<Record<string, string>>(join(__dirname, '../package.json'));
-  program
-    .version(packageJson?.version || '0.0.1')
-    .description('uctest - HTTP test runner for Unsafe Code Lab')
-    .addCommand(sendCommand(), { isDefault: true });
+  const program = sendCommand();
+  program.version(packageJson?.version || '0.0.1');
   return program;
 }
 

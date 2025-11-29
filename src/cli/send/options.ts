@@ -9,7 +9,7 @@ export type OutputType = 'body' | 'headers' | 'response' | 'none' | 'short' | 'e
 export interface SendOptions {
   env?: Array<string>;
   all?: boolean;
-  bail?: boolean; // Note: Commander's --no-bail sets this to false when used
+  keepGoing?: boolean; // -k, --keep-going: continue running after failures
   filter?: SendFilterOptions;
   help?: boolean;
   line?: number;
