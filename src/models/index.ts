@@ -23,7 +23,6 @@ export * from './parserContextData';
 export * from './pathLike';
 export * from './processedHttpRegion';
 export * from './processorContext';
-export * from './protoDefinition';
 export * from './repeatOptions';
 export * from './requestClient';
 export * from './requestLoggerFactoryOptions';
