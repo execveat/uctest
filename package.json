@@ -1,34 +1,24 @@
 {
-  "name": "httpyac",
-  "displayName": "httpYac - Yet Another Client",
+  "name": "uctest",
+  "displayName": "uctest - HTTP Test Runner",
   "license": "MIT",
-  "publisher": "AnWeber",
-  "description": "HTTP/REST CLI Client for *.http files",
-  "version": "6.16.7",
-  "homepage": "https://github.com/AnWeber/httpyac",
+  "description": "HTTP test runner for Unsafe Code Lab (httpyac fork)",
+  "version": "1.0.0",
+  "homepage": "https://github.com/execveat/uctest",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AnWeber/httpyac"
+    "url": "https://github.com/execveat/uctest"
   },
   "bugs": {
-    "url": "https://github.com/AnWeber/httpyac/issues"
+    "url": "https://github.com/execveat/uctest/issues"
   },
-  "icon": "icon.png",
   "keywords": [
     "HTTP",
     "REST",
-    "GraphQL",
-    "Intellij Http Client",
-    "Postman",
-    "Soap",
-    "gRPC",
-    "RabbitMQ",
-    "AMQP",
-    "WebSocket",
-    "EventSource",
-    "MQTT",
-    "ci",
-    "rest-client"
+    "testing",
+    "e2e",
+    "security",
+    "httpyac"
   ],
   "engines": {
     "node": ">=18"
@@ -36,7 +26,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "httpyac": "./bin/httpyac.js"
+    "uctest": "./bin/uctest.js"
   },
   "scripts": {
     "build": "npm run esbuild && npm run tsc",
