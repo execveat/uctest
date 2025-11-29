@@ -58,6 +58,7 @@ function initParseEndHook(api: models.HttpyacHooksApi) {
   api.hooks.parseEndRegion.addHook('registerCancelExecutionInterceptor', parseEnd.registerCancelExecutionInterceptor);
   api.hooks.parseEndRegion.addHook('response', parseEnd.closeResponseBody);
   api.hooks.parseEndRegion.addHook('requestBody', parseEnd.closeRequestBody);
+  api.hooks.parseEndRegion.addHook('validateHttpRegion', parseEnd.validateHttpRegion);
 }
 
 function initReplaceVariableHook(api: models.HttpyacHooksApi) {
