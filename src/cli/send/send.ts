@@ -10,7 +10,7 @@ import * as models from '../../models';
 import { HttpFileStore } from '../../store';
 import * as utils from '../../utils';
 import { toSendJsonOutput, toSendOutputRequest } from './jsonOutput';
-import { getLogLevel, OutputType, SendFilterOptions, SendOptions } from './options';
+import { getLogLevel, OutputType, SendOptions } from './options';
 import { createCliPluginRegister } from './plugin';
 import { SelectActionResult, selectHttpFiles } from './selectHttpFiles';
 
@@ -19,15 +19,10 @@ export function sendCommand() {
     .description('HTTP test runner for Unsafe Code Lab')
     .usage('[@tag...] [:name...] [path...] [options]')
     .argument('[args...]', 'Tags (@tag), names (:name), and paths')
-    .option('-a, --all', 'run ALL tests (ignore default @ci tag filter)')
     .option('-k, --keep-going', 'continue running after failures (default: stop on first)')
-    .option('-e, --env  <env...>', 'list of environments')
-    .option('--filter <filter>', 'filter requests output (only-failed)')
-    .option('--insecure', 'allow insecure server connections when using ssl')
-    .option('-i --interactive', 'do not exit the program after request, go back to selection')
     .option('--json', 'use json output')
     .option('--jsonl', 'stream json lines output')
-    .option('-l, --line <line>', 'line of the http requests')
+    .option('-l, --line <line>', 'line of the http requests', utils.toNumber)
     .option('--no-color', 'disable color support')
     .option('-o, --output <output>', 'output format of response (short, body, headers, response, exchange, none)', 'none')
     .option(
@@ -35,11 +30,6 @@ export function sendCommand() {
       'output format of failed response (short, body, headers, response, exchange, none)',
       'exchange'
     )
-    .option('--raw', 'prevent formatting of response body')
-    .option('--quiet', '')
-    .option('--repeat <count>', 'repeat count for requests', utils.toNumber)
-    .option('--repeat-mode <mode>', 'repeat mode: sequential, parallel (default)')
-    .option('--parallel <count>', 'send parallel requests', utils.toNumber)
     .option('-s, --silent', 'log only request')
     .option('--prune-refs', 'only execute leaf requests (prune referenced dependencies)')
     .option('-r, --resume', 'resume from last failed request')
@@ -54,6 +44,8 @@ export function sendCommand() {
 /**
  * Parse positional arguments into tags (@prefix), names (:prefix), and paths.
  * Supports uctest-style syntax: uctest @v301 @ci :checkout path/to/spec
+ *
+ * Tags use AND logic: @foo @bar means "tests with BOTH foo AND bar tags"
  */
 function parsePositionalArgs(args: Array<string>): { tags: Array<string>; names: Array<string>; paths: Array<string> } {
   const tags: Array<string> = [];
@@ -62,13 +54,17 @@ function parsePositionalArgs(args: Array<string>): { tags: Array<string>; names:
 
   for (const arg of args) {
     if (arg.startsWith('@')) {
-      // Tag: @tag1 or @tag1,tag2 (comma for OR within same filter)
       const tagValue = arg.slice(1);
       if (tagValue) {
+        // Reject commas - use separate @tag arguments instead
+        if (tagValue.includes(',')) {
+          console.error(`Error: Commas not supported in tags. Use separate arguments: @${tagValue.split(',').join(' @')}`);
+          process.exit(1);
+        }
         tags.push(tagValue);
       }
     } else if (arg.startsWith(':')) {
-      // Name: :name
+      // Name: :name (multiple names use OR logic)
       const nameValue = arg.slice(1);
       if (nameValue) {
         names.push(nameValue);
@@ -94,11 +90,6 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
     options.name = parsed.names;
   }
 
-  // Default to @ci tag if no tags specified and not --all mode
-  if (!options.tag && !options.all) {
-    options.tag = ['ci'];
-  }
-
   // Default paths to current directory if none specified
   const fileNames = parsed.paths.length > 0 ? parsed.paths : ['./**/*.http'];
 
@@ -117,84 +108,84 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
   let resumeState = resumeStateFile ? await loadResumeState(resumeStateFile) : undefined;
   try {
     if (httpFiles.length > 0) {
-      let isFirstRequest = true;
-      while (options.interactive || isFirstRequest) {
-        isFirstRequest = false;
-        let selection = await selectHttpFiles(httpFiles, options);
-        if (options.pruneRefs) {
-          selection = applyPruneRefs(selection);
-        }
-        if (resumeState) {
-          selection = applyResumeState(selection, resumeState);
-          resumeState = undefined;
-        }
-        const totals = countSelectedRequests(selection, httpFiles);
-        const totalRequests = totals.totalRequests;
-        const totalFiles = totals.totalFiles;
+      let selection = await selectHttpFiles(httpFiles, options);
+      if (selection.length === 0) {
+        console.error('No tests match the specified filters');
+        process.exit(1);
+      }
+      if (options.pruneRefs) {
+        selection = applyPruneRefs(selection);
+      }
+      if (resumeState) {
+        selection = applyResumeState(selection, resumeState);
+        resumeState = undefined;
+      }
+      const totals = countSelectedRequests(selection, httpFiles);
+      const totalRequests = totals.totalRequests;
+      const totalFiles = totals.totalFiles;
 
-        let emittedRequests = 0;
-        const emitJsonLine = options.jsonl ? createJsonlEmitter() : undefined;
+      let emittedRequests = 0;
+      const emitJsonLine = options.jsonl ? createJsonlEmitter() : undefined;
 
-        if (options.jsonl) {
+      if (options.jsonl) {
+        emitJsonLine?.({
+          type: 'start',
+          totalRequests,
+          totalFiles,
+        });
+        context.processedHttpRegionListener = processedHttpRegion => {
+          emittedRequests += 1;
           emitJsonLine?.({
-            type: 'start',
+            type: 'request',
+            index: emittedRequests,
             totalRequests,
-            totalFiles,
+            request: toSendOutputRequest(processedHttpRegion, options),
           });
-          context.processedHttpRegionListener = processedHttpRegion => {
-            emittedRequests += 1;
-            emitJsonLine?.({
-              type: 'request',
-              index: emittedRequests,
-              totalRequests,
-              request: toSendOutputRequest(processedHttpRegion, options),
-            });
-          };
-        } else {
-          context.processedHttpRegionListener = undefined;
-        }
-        context.processedHttpRegions = [];
+        };
+      } else {
+        context.processedHttpRegionListener = undefined;
+      }
+      context.processedHttpRegions = [];
 
-        const sendFuncs = selection.map(
-          ({ httpFile, httpRegions }) =>
-            async function sendHttpFile() {
-              if (!options.json && context.scriptConsole && selection.length > 1) {
-                context.scriptConsole.info(`--------------------- ${httpFile.fileName}  --`);
-              }
-              await send(Object.assign({}, context, { httpFile, httpRegions }));
+      const sendFuncs = selection.map(
+        ({ httpFile, httpRegions }) =>
+          async function sendHttpFile() {
+            if (!options.json && context.scriptConsole) {
+              context.scriptConsole.info(`--------------------- ${httpFile.fileName}  --`);
             }
-        );
-        await utils.promiseQueue(options.parallel || 1, ...sendFuncs);
-
-        const processedHttpRegions = context.processedHttpRegions || [];
-        const firstFailed =
-          options.resume && bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
-
-        if (options.jsonl) {
-          emittedRequests = emitRemainingJsonLines(
-            processedHttpRegions,
-            options,
-            emitJsonLine,
-            emittedRequests,
-            totalRequests
-          );
-          const cliJsonOutput = toSendJsonOutput(processedHttpRegions, options);
-          emitJsonLine?.({
-            type: 'summary',
-            totalRequests,
-            totalFiles,
-            summary: cliJsonOutput.summary,
-          });
-        } else {
-          reportOutput(context, options);
-        }
-
-        if (resumeStateFile && options.resume && bailEnabled) {
-          if (firstFailed) {
-            await saveResumeState(resumeStateFile, firstFailed);
-          } else {
-            await clearResumeState(resumeStateFile);
+            await send(Object.assign({}, context, { httpFile, httpRegions }));
           }
+      );
+      await utils.promiseQueue(1, ...sendFuncs);
+
+      const processedHttpRegions = context.processedHttpRegions || [];
+      const firstFailed =
+        options.resume && bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
+
+      if (options.jsonl) {
+        emittedRequests = emitRemainingJsonLines(
+          processedHttpRegions,
+          options,
+          emitJsonLine,
+          emittedRequests,
+          totalRequests
+        );
+        const cliJsonOutput = toSendJsonOutput(processedHttpRegions, options);
+        emitJsonLine?.({
+          type: 'summary',
+          totalRequests,
+          totalFiles,
+          summary: cliJsonOutput.summary,
+        });
+      } else {
+        reportOutput(context, options);
+      }
+
+      if (resumeStateFile && options.resume && bailEnabled) {
+        if (firstFailed) {
+          await saveResumeState(resumeStateFile, firstFailed);
+        } else {
+          await clearResumeState(resumeStateFile);
         }
       }
     } else {
@@ -506,20 +497,12 @@ async function clearResumeState(stateFile: string): Promise<void> {
 
 export function convertCliOptionsToContext(cliOptions: SendOptions) {
   const context: Omit<models.HttpFileSendContext, 'httpFile'> = {
-    activeEnvironment: cliOptions.env,
-    repeat: cliOptions.repeat
-      ? {
-          count: cliOptions.repeat,
-          type: cliOptions.repeatMode === 'sequential' ? models.RepeatOrder.sequential : models.RepeatOrder.parallel,
-        }
-      : undefined,
     config: {
       log: {
         level: getLogLevel(cliOptions),
       },
       request: {
         timeout: cliOptions.timeout,
-        https: cliOptions.insecure ? { rejectUnauthorized: false } : undefined,
       },
     },
     variables: cliOptions.var
@@ -540,7 +523,6 @@ export function initRequestLogger(cliOptions: SendOptions, context: Omit<models.
   }
   const scriptConsole = new Logger({
     level: getLogLevel(cliOptions),
-    onlyFailedTests: cliOptions.filter === SendFilterOptions.onlyFailed,
   });
   scriptConsole.collectMessages();
   context.scriptConsole = scriptConsole;
@@ -615,8 +597,7 @@ function getRequestLogger(
   logger: models.ConsoleLogHandler
 ): models.RequestLogger | undefined {
   const cliLoggerOptions = {
-    onlyFailed: options.filter === SendFilterOptions.onlyFailed,
-    responseBodyPrettyPrint: !options.raw,
+    responseBodyPrettyPrint: true,
   };
   const requestLoggerOptions = getRequestLoggerOptions(options.output, cliLoggerOptions, config?.log?.options);
 

@@ -1,4 +1,3 @@
-import { QuestionMap } from 'inquirer';
 import { HttpFile, HttpRegion } from '../../store';
 import { selectHttpFiles } from './selectHttpFiles';
 
@@ -56,13 +55,7 @@ describe('selectHttpFiles', () => {
     expect(selectHttpFiles).toBeDefined();
   });
 
-  it('should return all values', async () => {
-    const result = await selectHttpFiles(defaultHttpFiles, { all: true });
-
-    expect(result.length).toBe(2);
-    expect(result.map(h => h.httpFile.fileName)).toEqual(['test1', 'test2']);
-    expect(result.map(h => h.httpRegions)).toEqual([undefined, undefined]);
-  });
+  // Note: --all flag removed. No filters = all tests now.
   it('should return values by name', async () => {
     const result = await selectHttpFiles(defaultHttpFiles, { name: ['foo1'] });
 
@@ -77,30 +70,31 @@ describe('selectHttpFiles', () => {
     expect(result.map(h => h.httpFile.fileName)).toEqual(['test1', 'test2']);
     expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo1'], ['test2']]);
   });
-  it('should return values by tag', async () => {
-    const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo', 'fuu'] });
+  // Tag filtering now uses AND logic: all specified tags must be present
+  it('should use AND logic for multiple tag arguments', async () => {
+    // When tags: ['foo', 'bar'], only regions with BOTH tags should match
+    const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo', 'bar'] });
 
     expect(result.length).toBe(1);
     expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
-    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([
-      ['foo1', 'foo2', 'foo_both', 'foo5'],
-    ]);
-  });
-  it('should support comma separated tags', async () => {
-    const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo,bar'] });
-
-    expect(result.length).toBe(1);
-    expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
-    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([
-      ['foo1', 'foo2', 'foo3', 'foo4', 'foo_both'],
-    ]);
-  });
-  it('should support and separated tags', async () => {
-    const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo+bar'] });
-
-    expect(result.length).toBe(1);
-    expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
+    // Only foo_both has both 'foo' and 'bar' tags
     expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo_both']]);
+  });
+
+  it('should return empty when no region has all required tags', async () => {
+    // foo and fuu are never on the same region
+    const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo', 'fuu'] });
+    expect(result.length).toBe(0);
+  });
+
+  it('should match single tag', async () => {
+    const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo'] });
+
+    expect(result.length).toBe(1);
+    expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
+    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([
+      ['foo1', 'foo2', 'foo_both'],
+    ]);
   });
   it('should return values by line', async () => {
     const result = await selectHttpFiles(defaultHttpFiles, { line: 1 });
@@ -109,33 +103,48 @@ describe('selectHttpFiles', () => {
     expect(result.map(h => h.httpFile.fileName)).toEqual(['test1', 'test2']);
     expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo2'], ['test2']]);
   });
-  it('should return values by manual input', async () => {
-    const inquirer = await import('inquirer');
-    Object.assign(inquirer.default, {
-      prompt(questions: QuestionMap) {
-        const q = questions[0];
-        return {
-          region: q.choices[1],
-        };
-      },
+
+  // Name and tag filters use AND between them
+  it('should use AND between name and tag filters', async () => {
+    // foo1 and foo2 both have tag 'foo', so they should match
+    const result = await selectHttpFiles(defaultHttpFiles, {
+      name: ['foo1', 'foo2'],
+      tag: ['foo'],
     });
-    const result = await selectHttpFiles(defaultHttpFiles, {});
 
     expect(result.length).toBe(1);
     expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
-    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo1']]);
+    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo1', 'foo2']]);
   });
-  it('should return empty on invalid manual input', async () => {
-    const inquirer = await import('inquirer');
-    Object.assign(inquirer.default, {
-      prompt() {
-        return {
-          region: 'fii',
-        };
-      },
+
+  it('should exclude when name matches but tag does not', async () => {
+    // foo3 has tag 'bar', not 'foo'
+    const result = await selectHttpFiles(defaultHttpFiles, {
+      name: ['foo3'],
+      tag: ['foo'],
     });
-    const result = await selectHttpFiles(defaultHttpFiles, {});
 
     expect(result.length).toBe(0);
+  });
+
+  it('should exclude when tag matches but name does not', async () => {
+    // 'nonexistent' name doesn't exist
+    const result = await selectHttpFiles(defaultHttpFiles, {
+      name: ['nonexistent'],
+      tag: ['foo'],
+    });
+
+    expect(result.length).toBe(0);
+  });
+
+  // No filters = all regions
+  it('should return all regions when no filters specified', async () => {
+    const result = await selectHttpFiles(defaultHttpFiles, {});
+
+    // Should return all files with all their regions
+    expect(result.length).toBe(2);
+    expect(result.map(h => h.httpFile.fileName)).toEqual(['test1', 'test2']);
+    // httpRegions should be undefined (meaning all regions)
+    expect(result.map(h => h.httpRegions)).toEqual([undefined, undefined]);
   });
 });

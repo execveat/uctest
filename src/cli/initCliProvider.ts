@@ -79,61 +79,33 @@ function toBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 }
 
 async function initUserInteractionProvider() {
-  const inquirer = (await import('inquirer')).default;
+  // uctest is non-interactive - these functions return defaults or error
   userInteractionProvider.showNote = async function showNote(note: string) {
-    const answer = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'note',
-        message: note,
-      },
-    ]);
-    return answer.note;
+    console.log(`Note: ${note}`);
+    return true; // Auto-confirm
   };
   userInteractionProvider.showInputPrompt = async function showInputPrompt(
-    message: string,
+    _message: string,
     defaultValue?: string,
-    maskedInput?: boolean
+    _maskedInput?: boolean
   ) {
-    if (maskedInput) {
-      const answer = await inquirer.prompt([
-        {
-          type: 'password',
-          name: 'placeholder',
-          message,
-          mask: '*',
-          default: defaultValue,
-        },
-      ]);
-      return answer.placeholder;
+    // Return default value if available, otherwise error
+    if (defaultValue !== undefined) {
+      return defaultValue;
     }
-
-    const answer = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'placeholder',
-        message,
-        default: defaultValue,
-      },
-    ]);
-    return answer.placeholder;
+    throw new Error('Interactive input not supported in uctest. Use --var to pass values.');
   };
-  userInteractionProvider.showListPrompt = async function showListPrompt(message: string, values: string[]) {
-    const answer = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'placeholder',
-        message,
-        choices: values,
-      },
-    ]);
-    return answer.placeholder;
+  userInteractionProvider.showListPrompt = async function showListPrompt(_message: string, values: string[]) {
+    // Return first option if available
+    if (values.length > 0) {
+      return values[0];
+    }
+    throw new Error('Interactive selection not supported in uctest.');
   };
   userInteractionProvider.getClipboard = async function getClipboard() {
-    // Clipboard not supported in uctest CLI
     return '';
   };
   userInteractionProvider.setClipboard = async function setClipboard(_message: string) {
-    // Clipboard not supported in uctest CLI
+    // No-op
   };
 }

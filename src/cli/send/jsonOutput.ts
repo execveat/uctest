@@ -1,6 +1,6 @@
 import { HttpResponse, ProcessedHttpRegion, TestResult, TestResultStatus } from '../../models';
 import * as utils from '../../utils';
-import { SendFilterOptions, SendOptions } from './options';
+import { SendOptions } from './options';
 import { fileProvider } from '../../io';
 
 export interface SendJsonOutput {
@@ -53,15 +53,11 @@ export function toSendJsonOutput(
   for (const httpRegion of processedHttpRegions) {
     requests.push(toSendOutputRequest(httpRegion, options));
   }
-  let resultRequests = requests;
-  if (options.filter === SendFilterOptions.onlyFailed) {
-    resultRequests = requests.filter(obj => obj.summary.failedTests > 0);
-  }
   return {
     _meta: {
       version: '1.1.0',
     },
-    requests: resultRequests,
+    requests,
     summary: createTestSummary(requests),
   };
 }

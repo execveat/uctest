@@ -4,133 +4,107 @@ import { SendOptions } from './options';
 
 export type SelectActionResult = Array<{ httpRegions?: Array<models.HttpRegion>; httpFile: models.HttpFile }>;
 
+/**
+ * Select HTTP files and regions based on CLI filter options.
+ *
+ * Filter logic:
+ * - Tags: AND logic (all specified tags must be present)
+ * - Names: OR logic (any specified name matches)
+ * - Between filter types: AND logic (must pass all specified filters)
+ * - No filters: return all files with all regions
+ */
 export async function selectHttpFiles(
   httpFiles: Array<models.HttpFile>,
   cliOptions: SendOptions
 ): Promise<SelectActionResult> {
-  if (cliOptions.all) {
-    return httpFiles.map(httpFile => ({
-      httpFile,
-    }));
+  const hasFilters = hasAnyFilter(cliOptions);
+
+  if (!hasFilters) {
+    // No filters = return all files with all regions
+    return httpFiles.map(httpFile => ({ httpFile }));
   }
-  const resultWithArgs = selectHttpFilesWithArgs(httpFiles, cliOptions);
-  if (resultWithArgs.length > 0) {
-    return resultWithArgs;
-  }
-  return await selectManualHttpFiles(httpFiles);
+
+  return selectHttpFilesWithArgs(httpFiles, cliOptions);
+}
+
+function hasAnyFilter(opts: SendOptions): boolean {
+  return !!(
+    (opts.tag && opts.tag.length > 0) ||
+    (opts.name && opts.name.length > 0) ||
+    opts.line !== undefined
+  );
 }
 
 function selectHttpFilesWithArgs(httpFiles: Array<models.HttpFile>, cliOptions: SendOptions) {
   const result: SelectActionResult = [];
-  const tagMatchers = normalizeTagMatchers(cliOptions.tag);
+  const requiredTags = cliOptions.tag || [];
+  const requiredNames = cliOptions.name || [];
+  const line = cliOptions.line;
 
   for (const httpFile of httpFiles) {
     const httpRegions = httpFile.httpRegions.filter(h => {
-      if (hasName(h, cliOptions.name)) {
-        return true;
+      // AND between filter types: must pass ALL specified filters
+
+      // Tags: all must match (AND logic)
+      if (requiredTags.length > 0 && !hasAllTags(h, requiredTags)) {
+        return false;
       }
-      if (hasTag(h, tagMatchers)) {
-        return true;
+
+      // Names: any must match (OR logic within names)
+      if (requiredNames.length > 0 && !hasAnyName(h, requiredNames)) {
+        return false;
       }
-      if (isLine(h, cliOptions.line)) {
-        return true;
+
+      // Line: must be in range
+      if (line !== undefined && !isLine(h, line)) {
+        return false;
       }
-      return false;
+
+      return true;
     });
+
     if (httpRegions.length > 0) {
-      result.push({
-        httpFile,
-        httpRegions,
-      });
+      result.push({ httpFile, httpRegions });
     }
   }
+
   return result;
 }
 
-function hasName(httpRegion: models.HttpRegion, names: Array<string> | undefined) {
-  if (!names || names.length === 0 || !utils.isString(httpRegion.metaData?.name)) {
+/**
+ * Check if region has ALL required tags (AND logic).
+ */
+function hasAllTags(httpRegion: models.HttpRegion, requiredTags: Array<string>): boolean {
+  if (!utils.isString(httpRegion.metaData?.tag)) {
+    return false;
+  }
+
+  const regionTags = httpRegion.metaData.tag
+    .split(',')
+    .map(t => t.trim())
+    .filter(Boolean);
+
+  if (regionTags.length === 0) {
+    return false;
+  }
+
+  // All required tags must be present in region's tags
+  return requiredTags.every(tag => regionTags.includes(tag));
+}
+
+/**
+ * Check if region has ANY of the specified names (OR logic).
+ */
+function hasAnyName(httpRegion: models.HttpRegion, names: Array<string>): boolean {
+  if (!utils.isString(httpRegion.metaData?.name)) {
     return false;
   }
   return names.includes(httpRegion.metaData.name);
 }
 
-function isLine(httpRegion: models.HttpRegion, line: number | undefined) {
-  if (line !== undefined) {
-    return line && httpRegion.symbol.startLine <= line && httpRegion.symbol.endLine >= line;
-  }
-  return false;
-}
-
-function normalizeTagMatchers(tags: Array<string> | undefined): Array<Array<string>> {
-  const matchers: Array<Array<string>> = [];
-
-  if (!tags || tags.length === 0) {
-    return matchers;
-  }
-
-  for (const rawTag of tags) {
-    if (!rawTag) {
-      continue;
-    }
-
-    const sanitized = rawTag.replace(/\s+/gu, '');
-    const segments = sanitized.split(',').filter(Boolean);
-
-    for (const segment of segments) {
-      const allTags = segment.split('+').filter(Boolean);
-      if (allTags.length > 0) {
-        matchers.push(allTags);
-      }
-    }
-  }
-
-  return matchers;
-}
-
-function hasTag(httpRegion: models.HttpRegion, matchers: Array<Array<string>>) {
-  if (!matchers || matchers.length === 0 || !utils.isString(httpRegion.metaData?.tag)) {
-    return false;
-  }
-
-  const metaDataTag = httpRegion.metaData.tag?.split(',').map(t => t.trim()).filter(Boolean);
-  if (!metaDataTag || metaDataTag.length === 0) {
-    return false;
-  }
-
-  return matchers.some(group => group.every(tag => metaDataTag.includes(tag)));
-}
-
-async function selectManualHttpFiles(httpFiles: Array<models.HttpFile>): Promise<SelectActionResult> {
-  const httpRegionMap: Record<string, SelectActionResult> = {};
-  const hasManyFiles = httpFiles.length > 1;
-  const cwd = `${process.cwd()}`;
-  for (const httpFile of httpFiles) {
-    const fileName = utils.ensureString(httpFile.fileName)?.replace(cwd, '.');
-    httpRegionMap[hasManyFiles ? `${fileName}: all` : 'all'] = [{ httpFile }];
-
-    for (const httpRegion of httpFile.httpRegions) {
-      if (!httpRegion.isGlobal()) {
-        const name = httpRegion.symbol.name;
-        httpRegionMap[hasManyFiles ? `${fileName}: ${name}` : name] = [
-          {
-            httpRegions: [httpRegion],
-            httpFile,
-          },
-        ];
-      }
-    }
-  }
-  const inquirer = await import('inquirer');
-  const answer = await inquirer.default.prompt([
-    {
-      type: 'list',
-      name: 'region',
-      message: 'please choose which region to use',
-      choices: Object.entries(httpRegionMap).map(([key]) => key),
-    },
-  ]);
-  if (answer.region && httpRegionMap[answer.region]) {
-    return httpRegionMap[answer.region];
-  }
-  return [];
+/**
+ * Check if region contains the specified line.
+ */
+function isLine(httpRegion: models.HttpRegion, line: number): boolean {
+  return httpRegion.symbol.startLine <= line && httpRegion.symbol.endLine >= line;
 }
