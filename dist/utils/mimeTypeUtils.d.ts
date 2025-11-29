@@ -1,0 +1,14 @@
+import { ContentType } from '../models';
+export declare function parseMimeType(contentType: string): ContentType;
+export declare function isMimeTypeJSON(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeJavascript(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeXml(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeHtml(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeCSS(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeMarkdown(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeMultiPartFormData(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeMultiPartMixed(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeNewlineDelimitedJSON(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeFormUrlEncoded(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypePdf(contentType: ContentType | undefined): boolean;
+export declare function isMimeTypeImage(contentType: ContentType | undefined): boolean;

@@ -1,0 +1,10 @@
+import { PathLike } from '../models';
+export declare function toAbsoluteFilename(fileName: PathLike | undefined, baseName: PathLike | undefined): Promise<PathLike | undefined>;
+export declare function extensionName(fileName: PathLike): string | undefined;
+export declare function replaceInvalidChars(fileName: string): string;
+export declare function shortenFileName(fileName: string, maxChars?: number): string;
+export declare function findRootDirOfFile(filename: PathLike, workingDir?: PathLike, ...files: Array<string>): Promise<PathLike | undefined>;
+export declare function findRootDir(currentDir: PathLike | undefined, ...files: Array<string>): Promise<PathLike | undefined>;
+export declare function iterateUntilRoot(currentDir: PathLike, rootDir: PathLike | undefined, action: (dir: PathLike) => Promise<void>): Promise<PathLike | undefined>;
+export declare function iterateDirectoryTree(currentDir: PathLike | undefined, predicate: (dir: PathLike) => Promise<boolean>): Promise<PathLike | undefined>;
+export declare function equalsPath(path: PathLike | undefined, path2: PathLike | undefined): boolean;
