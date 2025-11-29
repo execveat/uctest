@@ -16,23 +16,18 @@ import { SelectActionResult, selectHttpFiles } from './selectHttpFiles';
 
 export function sendCommand() {
   const program = new Command('send')
-    .description('send/ execute http files')
-    .usage('<fileName...> [options]')
-    .argument('<fileName...>', 'path to file or glob pattern')
-    .option('-a, --all', 'execute all http requests in a http file')
-    .option('--bail', 'stops when a test case fails')
+    .description('Run HTTP spec tests with smart filtering')
+    .usage('[@tag...] [:name...] [path...] [options]')
+    .argument('[args...]', 'Tags (@tag), names (:name), and paths')
+    .option('-a, --all', 'run ALL tests (ignore default @ci tag filter)')
+    .option('-B, --no-bail', 'run all tests even after failure (default: stop on first)')
     .option('-e, --env  <env...>', 'list of environments')
-    .option('--filter <filter>', ' filter requests output (only-failed)')
+    .option('--filter <filter>', 'filter requests output (only-failed)')
     .option('--insecure', 'allow insecure server connections when using ssl')
     .option('-i --interactive', 'do not exit the program after request, go back to selection')
     .option('--json', 'use json output')
     .option('--jsonl', 'stream json lines output')
     .option('-l, --line <line>', 'line of the http requests')
-    .option(
-      '-n, --name <name>',
-      'name of the http requests',
-      (value, previous: Array<string> | undefined) => (previous ? [...previous, value] : [value])
-    )
     .option('--no-color', 'disable color support')
     .option('-o, --output <output>', 'output format of response (short, body, headers, response, exchange, none)')
     .option(
@@ -45,9 +40,9 @@ export function sendCommand() {
     .option('--repeat-mode <mode>', 'repeat mode: sequential, parallel (default)')
     .option('--parallel <count>', 'send parallel requests', utils.toNumber)
     .option('-s, --silent', 'log only request')
-    .option('-t, --tag  <tag...>', 'list of tags to execute')
     .option('--prune-refs', 'only execute leaf requests (prune referenced dependencies)')
-    .option('--resume', 'resume from last failed request (requires --bail)')
+    .option('-r, --resume', 'resume from last failed request')
+    .option('--state-file <path>', 'path to state file for resume (default: .uctest-state)')
     .option('--timeout <timeout>', 'maximum time allowed for connections', utils.toNumber)
     .option('--var  <variables...>', 'list of variables (e.g foo="bar")')
     .option('-v, --verbose', 'make the operation more talkative')
@@ -55,12 +50,70 @@ export function sendCommand() {
   return program;
 }
 
-async function execute(fileNames: Array<string>, options: SendOptions): Promise<void> {
+/**
+ * Parse positional arguments into tags (@prefix), names (:prefix), and paths.
+ * Supports uctest-style syntax: uctest @v301 @ci :checkout path/to/spec
+ */
+function parsePositionalArgs(args: Array<string>): { tags: Array<string>; names: Array<string>; paths: Array<string> } {
+  const tags: Array<string> = [];
+  const names: Array<string> = [];
+  const paths: Array<string> = [];
+
+  for (const arg of args) {
+    if (arg.startsWith('@')) {
+      // Tag: @tag1 or @tag1,tag2 (comma for OR within same filter)
+      const tagValue = arg.slice(1);
+      if (tagValue) {
+        tags.push(tagValue);
+      }
+    } else if (arg.startsWith(':')) {
+      // Name: :name
+      const nameValue = arg.slice(1);
+      if (nameValue) {
+        names.push(nameValue);
+      }
+    } else {
+      // Path
+      paths.push(arg);
+    }
+  }
+
+  return { tags, names, paths };
+}
+
+async function execute(args: Array<string>, options: SendOptions): Promise<void> {
+  // Parse positional args into tags, names, and paths
+  const parsed = parsePositionalArgs(args);
+
+  // Apply parsed values to options
+  if (parsed.tags.length > 0) {
+    options.tag = parsed.tags;
+  }
+  if (parsed.names.length > 0) {
+    options.name = parsed.names;
+  }
+
+  // Default to @ci tag if no tags specified and not --all mode
+  if (!options.tag && !options.all) {
+    options.tag = ['ci'];
+  }
+
+  // Default paths to current directory if none specified
+  const fileNames = parsed.paths.length > 0 ? parsed.paths : ['./**/*.http'];
+
+  // bail is ON by default (Commander's --no-bail sets it to false)
+  // When bail is undefined (not explicitly set), treat as true (enabled)
+  const bailEnabled = options.bail !== false;
+  options.bail = bailEnabled;
+
   const context = convertCliOptionsToContext(options);
   const { httpFiles, config } = await getHttpFiles(fileNames, options, context.config || {});
   context.config = config;
   initRequestLogger(options, context);
-  const resumeStateFile = options.resume ? join(process.cwd(), '.httpyac-state') : undefined;
+
+  // State file for resume functionality
+  const defaultStateFile = join(process.cwd(), '.uctest-state');
+  const resumeStateFile = options.resume ? (options.stateFile || defaultStateFile) : undefined;
   let resumeState = resumeStateFile ? await loadResumeState(resumeStateFile) : undefined;
   try {
     if (httpFiles.length > 0) {
@@ -145,7 +198,7 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
         }
       }
     } else {
-      console.error(`httpYac cannot find the specified file ${fileNames.join(', ')}.`);
+      console.error(`uctest cannot find any .http files matching: ${fileNames.join(', ')}`);
     }
   } finally {
     context.scriptConsole?.flush?.();

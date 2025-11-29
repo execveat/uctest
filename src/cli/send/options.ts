@@ -9,7 +9,7 @@ export type OutputType = 'body' | 'headers' | 'response' | 'none' | 'short' | 'e
 export interface SendOptions {
   env?: Array<string>;
   all?: boolean;
-  bail?: boolean;
+  bail?: boolean; // Note: Commander's --no-bail sets this to false when used
   filter?: SendFilterOptions;
   help?: boolean;
   line?: number;
@@ -31,6 +31,7 @@ export interface SendOptions {
   verbose?: boolean;
   pruneRefs?: boolean;
   resume?: boolean;
+  stateFile?: string;
 }
 
 export function getLogLevel(cliOptions: SendOptions): LogLevel | undefined {
