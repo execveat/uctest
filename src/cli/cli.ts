@@ -3,7 +3,6 @@ import { join } from 'path';
 
 import * as utils from '../utils';
 import { initIOProvider } from './initCliProvider';
-import { oauth2Command } from './oauth2';
 import { sendCommand } from './send';
 
 export async function createProgram() {
@@ -11,8 +10,7 @@ export async function createProgram() {
   const packageJson = await utils.parseJson<Record<string, string>>(join(__dirname, '../package.json'));
   program
     .version(packageJson?.version || '0.0.1')
-    .description('httpYac - Quickly and easily send REST, SOAP, GraphQL and gRPC requests')
-    .addCommand(oauth2Command())
+    .description('uctest - HTTP test runner for Unsafe Code Lab')
     .addCommand(sendCommand(), { isDefault: true });
   return program;
 }

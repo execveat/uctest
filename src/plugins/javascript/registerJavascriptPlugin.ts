@@ -1,7 +1,6 @@
 import './completionItemProvider';
 
 import { default as dayjs } from 'dayjs';
-import open from 'open';
 import * as uuid from 'uuid';
 
 import * as httpyac from '../..';
@@ -30,7 +29,6 @@ function addDefaultRequire() {
   Object.assign(httpyac.io.javascriptProvider.require, {
     httpyac,
     dayjs,
-    open,
     uuid,
   });
 }
