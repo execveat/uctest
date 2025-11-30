@@ -17,5 +17,7 @@ export interface SendOptions {
     pruneRefs?: boolean;
     resume?: boolean;
     stateFile?: string;
+    noCache?: boolean;
+    showPlan?: boolean;
 }
 export declare function getLogLevel(cliOptions: SendOptions): LogLevel | undefined;

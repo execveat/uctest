@@ -34,6 +34,19 @@ class RefMetaAction {
   constructor(private readonly data: RefMetaHttpRegionData) {}
 
   async process(context: models.ProcessorContext): Promise<boolean> {
+    if (context.options?.skipRefResolution === true) {
+      const nameResult = await utils.replaceVariables(this.data.name, this.id, context);
+      if (typeof nameResult !== 'string' || !nameResult) {
+        return true;
+      }
+      const reference = utils.findHttpRegionInContext(nameResult, context);
+      if (reference && context.processedHttpRegions?.some(r => r.id === reference.id)) {
+        const envKey = utils.toEnvironmentKey(context.activeEnvironment);
+        utils.setVariableInContext(reference.variablesPerEnv[envKey], context);
+      }
+      return true;
+    }
+
     const name = await utils.replaceVariables(this.data.name, this.id, context);
     if (typeof name !== 'string' || !name) {
       log.error(`ref ${this.data.name} not resolvable to a valid name: ${this.data.name} -> ${name}`);

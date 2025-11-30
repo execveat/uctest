@@ -10,6 +10,8 @@ interface ResumeState {
     name?: string;
 }
 export declare function applyResumeState(selection: SelectActionResult, state: ResumeState): SelectActionResult;
-export declare function convertCliOptionsToContext(cliOptions: SendOptions): Omit<models.HttpFileSendContext, "httpFile">;
+export declare function convertCliOptionsToContext(cliOptions: SendOptions): Omit<models.HttpFileSendContext, "httpFile"> & {
+    options: Record<string, unknown>;
+};
 export declare function initRequestLogger(cliOptions: SendOptions, context: Omit<models.HttpFileSendContext, 'httpFile'>): void;
 export {};

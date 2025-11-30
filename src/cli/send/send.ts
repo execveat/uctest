@@ -2,7 +2,7 @@ import { default as chalk } from 'chalk';
 import { Command } from 'commander';
 import { promises as fs } from 'fs';
 import type { Options } from 'globby';
-import { isAbsolute, join, relative, sep } from 'path';
+import { isAbsolute, join, parse, relative, sep, resolve } from 'path';
 
 import { send } from '../../httpYacApi';
 import { Logger, fileProvider } from '../../io';
@@ -10,6 +10,16 @@ import * as models from '../../models';
 import { HttpFileStore } from '../../store';
 import * as utils from '../../utils';
 import { toSendJsonOutput, toSendOutputRequest } from './jsonOutput';
+import {
+  buildDependencyGraph,
+  computeExecutionPlan,
+  countFilesInPlan,
+  detectForceRefChains,
+  executePlan as executeOptimizedPlan,
+  type DependencyModel,
+  type ExecutionPlan,
+  loadOrBuildModel,
+} from './optimizer';
 import { getLogLevel, OutputType, SendOptions } from './options';
 import { createCliPluginRegister } from './plugin';
 import { SelectActionResult, selectHttpFiles } from './selectHttpFiles';
@@ -32,6 +42,8 @@ export function sendCommand() {
     )
     .option('-s, --silent', 'log only request')
     .option('--prune-refs', 'only execute leaf requests (prune referenced dependencies)')
+    .option('--no-cache', 'skip cache, always rebuild dependency model')
+    .option('--show-plan', 'print execution plan without running')
     .option('-r, --resume', 'resume from last failed request')
     .option('--state-file <path>', 'path to state file for resume (default: .uctest-state)')
     .option('--timeout <timeout>', 'maximum time allowed for connections', utils.toNumber)
@@ -98,7 +110,7 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
   const bailEnabled = !options.keepGoing;
 
   const context = convertCliOptionsToContext(options);
-  const { httpFiles, config } = await getHttpFiles(fileNames, bailEnabled, context.config || {});
+  const { httpFiles, config, httpFileStore } = await getHttpFiles(fileNames, bailEnabled, context.config || {});
   context.config = config;
   initRequestLogger(options, context);
 
@@ -114,7 +126,17 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
         process.exit(1);
       }
       if (options.pruneRefs) {
-        selection = applyPruneRefs(selection);
+        await executeWithOptimizer(
+          httpFiles,
+          httpFileStore,
+          selection,
+          context,
+          options,
+          resumeState,
+          resumeStateFile,
+          bailEnabled
+        );
+        return;
       }
       if (resumeState) {
         selection = applyResumeState(selection, resumeState);
@@ -316,6 +338,193 @@ function countSelectedRequests(selection: SelectActionResult, allHttpFiles: Arra
   };
 }
 
+function selectionToRegionIds(selection: SelectActionResult): Array<string> {
+  const ids: Array<string> = [];
+  for (const { httpFile, httpRegions } of selection) {
+    const regions = httpRegions ?? httpFile.httpRegions;
+    for (const region of regions) {
+      if (region.metaData?.disabled === true || region.metaData?.skip) {
+        continue;
+      }
+      ids.push(region.id);
+    }
+  }
+  return ids;
+}
+
+async function ensureHttpFilesForPlan(
+  plan: ExecutionPlan,
+  model: DependencyModel,
+  httpFiles: Array<models.HttpFile>,
+  httpFileStore: HttpFileStore,
+  config: models.EnvironmentConfig | undefined
+): Promise<models.EnvironmentConfig | undefined> {
+  const httpFilesByPath = new Map<string, models.HttpFile>();
+  for (const file of httpFiles) {
+    const normalized = normalizeRelativePath(file.fileName, model.rootDir);
+    if (normalized) {
+      httpFilesByPath.set(normalized, file);
+    }
+  }
+
+  const requiredFiles = new Set<string>();
+  for (const stage of plan.stages) {
+    for (const unit of stage.units) {
+      for (const regionId of unit.regionIds) {
+        const region = model.regions[regionId];
+        if (region) {
+          requiredFiles.add(region.file);
+        }
+      }
+    }
+  }
+
+  const queue = Array.from(requiredFiles);
+  while (queue.length > 0) {
+    const current = queue.pop();
+    if (!current) {
+      continue;
+    }
+    const imports = model.importGraph[current] || [];
+    for (const imp of imports) {
+      if (!requiredFiles.has(imp)) {
+        requiredFiles.add(imp);
+        queue.push(imp);
+      }
+    }
+  }
+
+  const parseOptions: models.HttpFileStoreOptions = {
+    workingDir: process.cwd(),
+    config,
+  };
+
+  for (const file of Array.from(requiredFiles)) {
+    if (httpFilesByPath.has(file)) {
+      continue;
+    }
+    const absolute = join(model.rootDir, file);
+    const httpFile = await httpFileStore.getOrCreate(
+      absolute,
+      async () => await fs.readFile(absolute, 'utf8'),
+      0,
+      parseOptions
+    );
+    httpFilesByPath.set(file, httpFile);
+    httpFiles.push(httpFile);
+  }
+
+  return parseOptions.config;
+}
+
+async function executeWithOptimizer(
+  httpFiles: Array<models.HttpFile>,
+  httpFileStore: HttpFileStore,
+  selection: SelectActionResult,
+  context: Omit<models.HttpFileSendContext, 'httpFile'> & { options?: Record<string, unknown> },
+  options: SendOptions,
+  resumeState: ResumeState | undefined,
+  resumeStateFile: string | undefined,
+  bailEnabled: boolean
+): Promise<void> {
+  const selectionIds = selectionToRegionIds(selection);
+  const rootDir = getModelRootDir(httpFiles);
+  const model = await loadOrBuildModel(rootDir, {
+    noCache: options.noCache,
+  });
+
+  const graph = buildDependencyGraph(model);
+  const chains = detectForceRefChains(graph);
+  const plan = computeExecutionPlan(model, graph, chains, {
+    selection: selectionIds,
+    filters: {
+      tags: options.tag,
+      names: options.name,
+      line: options.line,
+    },
+  });
+
+  if (options.showPlan) {
+    await executeOptimizedPlan(plan, model, httpFiles, context, { showPlan: true });
+    return;
+  }
+
+  context.options = { ...(context.options || {}), skipRefResolution: true };
+  context.processedHttpRegions = [];
+
+  const updatedConfig = await ensureHttpFilesForPlan(plan, model, httpFiles, httpFileStore, context.config);
+  context.config = updatedConfig || context.config;
+
+  const totalRequests = plan.stats.totalRegions;
+  const totalFiles = countFilesInPlan(plan, model);
+
+  let emittedRequests = 0;
+  const emitJsonLine = options.jsonl ? createJsonlEmitter() : undefined;
+
+  if (options.jsonl) {
+    emitJsonLine?.({
+      type: 'start',
+      totalRequests,
+      totalFiles,
+    });
+    context.processedHttpRegionListener = processedHttpRegion => {
+      emittedRequests += 1;
+      emitJsonLine?.({
+        type: 'request',
+        index: emittedRequests,
+        totalRequests,
+        request: toSendOutputRequest(processedHttpRegion, options),
+      });
+    };
+  } else {
+    context.processedHttpRegionListener = undefined;
+  }
+
+  await executeOptimizedPlan(plan, model, httpFiles, context, { resumeState });
+
+  const processedHttpRegions = context.processedHttpRegions || [];
+  const firstFailed = options.resume && bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
+
+  if (options.jsonl) {
+    emittedRequests = emitRemainingJsonLines(
+      processedHttpRegions,
+      options,
+      emitJsonLine,
+      emittedRequests,
+      totalRequests
+    );
+    const cliJsonOutput = toSendJsonOutput(processedHttpRegions, options);
+    emitJsonLine?.({
+      type: 'summary',
+      totalRequests,
+      totalFiles,
+      summary: cliJsonOutput.summary,
+    });
+  } else {
+    reportOutput(context, options);
+  }
+
+  if (resumeStateFile && options.resume && bailEnabled) {
+    if (firstFailed) {
+      await saveResumeState(resumeStateFile, firstFailed);
+    } else {
+      await clearResumeState(resumeStateFile);
+    }
+  }
+}
+
+function normalizeRelativePath(fileName: models.PathLike | undefined, rootDir: string): string | undefined {
+  if (!fileName) {
+    return undefined;
+  }
+  const fsPath = fileProvider.fsPath(fileName) || fileProvider.toString(fileName);
+  if (!fsPath) {
+    return undefined;
+  }
+  const relPath = isAbsolute(fsPath) ? relative(rootDir, fsPath) : fsPath;
+  return relPath.split(sep).join('/');
+}
+
 function findFirstFailedRegion(processed: Array<models.ProcessedHttpRegion>) {
   return processed.find(region =>
     region.testResults?.some(
@@ -323,6 +532,37 @@ function findFirstFailedRegion(processed: Array<models.ProcessedHttpRegion>) {
         testResult.status === models.TestResultStatus.ERROR || testResult.status === models.TestResultStatus.FAILED
     )
   );
+}
+
+function getModelRootDir(httpFiles: Array<models.HttpFile>): string {
+  const filePaths = httpFiles
+    .map(file => fileProvider.fsPath(file.fileName) || fileProvider.toString(file.fileName))
+    .filter((value): value is string => !!value)
+    .map(value => (isAbsolute(value) ? value : resolve(process.cwd(), value)));
+
+  if (filePaths.length === 0) {
+    return process.cwd();
+  }
+
+  const root = parse(filePaths[0]).root || process.cwd();
+  const segments = filePaths.map(filePath => {
+    const dir = parse(filePath).dir;
+    const rel = relative(root, dir);
+    return rel ? rel.split(sep).filter(Boolean) : [];
+  });
+  const minLength = Math.min(...segments.map(parts => parts.length));
+  const commonParts: string[] = [];
+
+  for (let index = 0; index < minLength; index += 1) {
+    const part = segments[0][index];
+    if (segments.every(parts => parts[index] === part)) {
+      commonParts.push(part);
+    } else {
+      break;
+    }
+  }
+
+  return join(root, ...commonParts);
 }
 
 export function applyPruneRefs(selection: SelectActionResult): SelectActionResult {
@@ -496,7 +736,7 @@ async function clearResumeState(stateFile: string): Promise<void> {
 }
 
 export function convertCliOptionsToContext(cliOptions: SendOptions) {
-  const context: Omit<models.HttpFileSendContext, 'httpFile'> = {
+  const context: Omit<models.HttpFileSendContext, 'httpFile'> & { options: Record<string, unknown> } = {
     config: {
       log: {
         level: getLogLevel(cliOptions),
@@ -513,6 +753,7 @@ export function convertCliOptionsToContext(cliOptions: SendOptions) {
           })
         )
       : undefined,
+    options: {},
   };
   return context;
 }
@@ -538,7 +779,11 @@ export function initRequestLogger(cliOptions: SendOptions, context: Omit<models.
   }
 }
 
-async function getHttpFiles(fileNames: Array<string>, bailEnabled: boolean, config: models.EnvironmentConfig) {
+async function getHttpFiles(
+  fileNames: Array<string>,
+  bailEnabled: boolean,
+  config: models.EnvironmentConfig
+): Promise<{ httpFiles: models.HttpFile[]; config: models.EnvironmentConfig | undefined; httpFileStore: HttpFileStore }> {
   const httpFiles: models.HttpFile[] = [];
   const httpFileStore = new HttpFileStore({
     cli: createCliPluginRegister(bailEnabled),
@@ -566,6 +811,7 @@ async function getHttpFiles(fileNames: Array<string>, bailEnabled: boolean, conf
   return {
     httpFiles,
     config: parseOptions.config,
+    httpFileStore,
   };
 }
 
