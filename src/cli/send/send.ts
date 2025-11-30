@@ -111,10 +111,13 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
   // When keepGoing is true, bail is disabled
   const bailEnabled = !options.keepGoing;
 
+  // Calculate showProgress early so we can pass it to initRequestLogger
+  const showProgress = shouldShowProgressBar(options);
+
   const context = convertCliOptionsToContext(options);
   const { httpFiles, config, httpFileStore } = await getHttpFiles(fileNames, bailEnabled, context.config || {});
   context.config = config;
-  initRequestLogger(options, context);
+  initRequestLogger(options, context, showProgress);
 
   // State file for resume functionality
   const defaultStateFile = join(process.cwd(), '.uctest-state');
@@ -152,7 +155,7 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
       const requestedRegionIds = getRequestedRegionIds(selection);
 
       // Progress bar setup - tracks user-selected tests, not total HTTP requests
-      const showProgress = shouldShowProgressBar(options);
+      // (showProgress is calculated at top of execute() function)
       const progressBar = new TestProgressBar({ requestedRegionIds }, showProgress);
 
       let emittedRequests = 0;
@@ -198,6 +201,9 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
       await utils.promiseQueue(1, ...sendFuncs);
 
       progressBar.stop();
+      if (showProgress) {
+        console.info('');  // Newline after progress bar to separate from subsequent output
+      }
 
       const processedHttpRegions = context.processedHttpRegions || [];
       const firstFailed = bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
@@ -257,7 +263,7 @@ function reportOutput(
     // Show failure details in progress bar mode when tests fail (not in --keep-going mode)
     const hasFailures = cliJsonOutput.summary.failedRequests > 0 || cliJsonOutput.summary.erroredRequests > 0;
     if (reportOpts.showFailureDetails && hasFailures && reportOpts.bailEnabled) {
-      reportFailureDetails(processedHttpRegions, context.scriptConsole);
+      reportFailureDetails(processedHttpRegions);
     }
 
     context.scriptConsole.info('---------------------');
@@ -284,11 +290,11 @@ function reportOutput(
 /**
  * Report detailed information about failed/errored tests.
  * Called in progress bar mode when tests fail (and not using --keep-going).
+ *
+ * Uses direct console.info() instead of buffered scriptConsole to avoid
+ * interleaving with other buffered output.
  */
-function reportFailureDetails(
-  processedHttpRegions: Array<models.ProcessedHttpRegion>,
-  console: models.ConsoleLogHandler
-) {
+function reportFailureDetails(processedHttpRegions: Array<models.ProcessedHttpRegion>) {
   const failed = processedHttpRegions.filter(region =>
     region.testResults?.some(
       t => t.status === models.TestResultStatus.ERROR || t.status === models.TestResultStatus.FAILED
@@ -297,8 +303,8 @@ function reportFailureDetails(
 
   if (failed.length === 0) return;
 
-  console.info('');
-  console.info(chalk.red.bold('═══ Test Failure Details ═══'));
+  // Use direct console.info() to avoid buffering issues
+  console.info(chalk.red.bold('═══ Test Failure ═══'));
 
   for (const region of failed) {
     const fileName = fileProvider.fsPath(region.filename) || fileProvider.toString(region.filename);
@@ -314,61 +320,35 @@ function reportFailureDetails(
     if (region.request) {
       const method = region.request.method || 'GET';
       const url = region.request.url || '';
-      console.info(chalk.cyan(`  → ${method} ${url}`));
+      console.info(chalk.cyan(`  ${method} ${url}`));
     }
 
     // Show response status if available
-    if (region.response) {
+    if (region.response?.statusCode) {
       const status = region.response.statusCode;
-      const statusColor = status && status >= 400 ? chalk.red : chalk.green;
-      console.info(`  ← ${statusColor(status)} ${region.response.statusMessage || ''}`);
+      const statusColor = status >= 400 ? chalk.red : chalk.green;
+      console.info(chalk.gray(`  Response: ${statusColor(status)}`));
     }
 
-    // Show test results
+    // Show UNIQUE error messages (dedupe)
+    const seenMessages = new Set<string>();
     const failedTests = region.testResults?.filter(
       t => t.status === models.TestResultStatus.ERROR || t.status === models.TestResultStatus.FAILED
     ) || [];
 
     for (const test of failedTests) {
+      // Dedupe by message to avoid showing same error multiple times
+      if (seenMessages.has(test.message)) continue;
+      seenMessages.add(test.message);
+
       const icon = test.status === models.TestResultStatus.ERROR ? '⚠' : '✗';
       const color = test.status === models.TestResultStatus.ERROR ? chalk.yellow : chalk.red;
-
       console.info(color(`  ${icon} ${test.message}`));
-
-      // Show error details if available
-      if (test.error) {
-        if (test.error.displayMessage && test.error.displayMessage !== test.message) {
-          console.info(chalk.gray(`    ${test.error.displayMessage}`));
-        }
-        if (test.error.file && test.error.line) {
-          console.info(chalk.gray(`    at ${test.error.file}:${test.error.line}`));
-        }
-      }
-    }
-
-    // Show response body snippet for debugging (if available and not too large)
-    if (region.response?.body && failedTests.length > 0) {
-      const body = typeof region.response.body === 'string'
-        ? region.response.body
-        : JSON.stringify(region.response.body, null, 2);
-      const maxLen = 500;
-      const truncated = body.length > maxLen ? body.slice(0, maxLen) + '...' : body;
-      if (truncated.trim()) {
-        console.info(chalk.gray('  Response body:'));
-        const lines = truncated.split('\n').slice(0, 10);
-        for (const bodyLine of lines) {
-          console.info(chalk.gray(`    ${bodyLine}`));
-        }
-        if (body.split('\n').length > 10) {
-          console.info(chalk.gray('    ...'));
-        }
-      }
     }
   }
 
   console.info('');
-  console.info(chalk.gray('Resume state saved. Run with --resume (-r) to restart from the failed test.'));
-  console.info('');
+  console.info(chalk.gray('Resume state saved. Run with --resume (-r) to restart.'));
 }
 
 function emitRemainingJsonLines(
@@ -664,6 +644,9 @@ async function executeWithOptimizer(
   await executeOptimizedPlan(plan, model, httpFiles, context, { resumeState, showProgress });
 
   progressBar.stop();
+  if (showProgress) {
+    console.info('');  // Newline after progress bar to separate from subsequent output
+  }
 
   const processedHttpRegions = context.processedHttpRegions || [];
   const firstFailed = bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
@@ -943,7 +926,11 @@ export function convertCliOptionsToContext(cliOptions: SendOptions) {
   return context;
 }
 
-export function initRequestLogger(cliOptions: SendOptions, context: Omit<models.HttpFileSendContext, 'httpFile'>) {
+export function initRequestLogger(
+  cliOptions: SendOptions,
+  context: Omit<models.HttpFileSendContext, 'httpFile'>,
+  showProgress = false
+) {
   if (cliOptions.jsonl) {
     return;
   }
@@ -959,7 +946,11 @@ export function initRequestLogger(cliOptions: SendOptions, context: Omit<models.
       if (logger) {
         await logger(response, httpRegion);
       }
-      scriptConsole.flush();
+      // In progress bar mode, don't flush per-request to avoid interleaving with progress bar
+      // The final flush happens in the finally block
+      if (!showProgress) {
+        scriptConsole.flush();
+      }
     };
   }
 }

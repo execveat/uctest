@@ -13,5 +13,5 @@ export declare function applyResumeState(selection: SelectActionResult, state: R
 export declare function convertCliOptionsToContext(cliOptions: SendOptions): Omit<models.HttpFileSendContext, "httpFile"> & {
     options: Record<string, unknown>;
 };
-export declare function initRequestLogger(cliOptions: SendOptions, context: Omit<models.HttpFileSendContext, 'httpFile'>): void;
+export declare function initRequestLogger(cliOptions: SendOptions, context: Omit<models.HttpFileSendContext, 'httpFile'>, showProgress?: boolean): void;
 export {};
