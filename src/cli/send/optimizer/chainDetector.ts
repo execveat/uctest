@@ -33,7 +33,8 @@ export function detectForceRefChains(graph: DependencyGraph): ForceRefChain[] {
     }
 
     if (!hasBranchingTarget && chain.length > 1) {
-      chains.push({ id: `chain_${chain[0]}`, regionIds: chain, softDeps });
+      const leafId = chain[chain.length - 1];
+      chains.push({ id: `chain_${chain[0]}_${leafId}`, regionIds: chain, softDeps });
     }
   }
 

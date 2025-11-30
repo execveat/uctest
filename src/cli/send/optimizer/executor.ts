@@ -180,8 +180,29 @@ async function executeGlobalsForFile(
   const fileContext = await runtime.createProcessorContext({
     ...context,
     httpFile,
+    processedHttpRegions: [],
+    processedHttpRegionListener: undefined,
   } as models.HttpFileSendContext);
   await runtime.executeGlobalScripts(fileContext);
+  const envKey = utils.toEnvironmentKey(context.activeEnvironment);
+  try {
+    if (Array.isArray(httpFile.globalHttpRegions)) {
+      for (const region of httpFile.globalHttpRegions) {
+        const vars = region?.variablesPerEnv?.[envKey];
+        if (vars) {
+          utils.setVariableInContext(vars, context as models.ProcessorContext);
+        }
+      }
+    }
+  } catch (err) {
+    // Ignore variable propagation issues from globals; execution will proceed with already merged variables
+  }
+  if (fileContext.variables) {
+    context.variables = {
+      ...(context.variables || {}),
+      ...fileContext.variables,
+    };
+  }
   executedGlobals.add(filePath);
 }
 

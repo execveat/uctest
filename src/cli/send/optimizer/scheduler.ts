@@ -57,7 +57,10 @@ export function computeExecutionPlan(
 
 function collectRequestedRegions(model: DependencyModel, options: PlanOptions): string[] {
   if (options.selection && options.selection.length > 0) {
-    return options.selection.slice();
+    return options.selection
+      .map(id => model.regions[id])
+      .filter((region): region is DependencyModel['regions'][string] => !!region && !region.isGlobal)
+      .map(region => region.id);
   }
 
   const filters = options.filters || {};

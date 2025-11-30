@@ -23,6 +23,7 @@ import {
 import { getLogLevel, OutputType, SendOptions } from './options';
 import { createCliPluginRegister } from './plugin';
 import { SelectActionResult, selectHttpFiles } from './selectHttpFiles';
+import { createEmptyProcessorContext } from '../../httpYacApi';
 
 export function sendCommand() {
   const program = new Command('uctest')
@@ -343,7 +344,7 @@ function selectionToRegionIds(selection: SelectActionResult): Array<string> {
   for (const { httpFile, httpRegions } of selection) {
     const regions = httpRegions ?? httpFile.httpRegions;
     for (const region of regions) {
-      if (region.metaData?.disabled === true || region.metaData?.skip) {
+      if (region.metaData?.disabled === true || region.metaData?.skip || region.isGlobal()) {
         continue;
       }
       ids.push(region.id);
@@ -451,6 +452,16 @@ async function executeWithOptimizer(
 
   context.options = { ...(context.options || {}), skipRefResolution: true };
   context.processedHttpRegions = [];
+  // Preload environment variables once to ensure globals have access before execution
+  if (httpFiles.length > 0) {
+    const preload = await createEmptyProcessorContext({
+      ...(context as models.HttpFileSendContext),
+      httpFile: httpFiles[0],
+    });
+    if (preload.variables) {
+      context.variables = { ...(context.variables || {}), ...preload.variables };
+    }
+  }
 
   const updatedConfig = await ensureHttpFilesForPlan(plan, model, httpFiles, httpFileStore, context.config);
   context.config = updatedConfig || context.config;
