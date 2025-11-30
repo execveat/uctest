@@ -3,7 +3,7 @@
   "displayName": "uctest - HTTP Test Runner",
   "license": "MIT",
   "description": "HTTP test runner for Unsafe Code Lab (httpyac fork)",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "homepage": "https://github.com/execveat/uctest",
   "repository": {
     "type": "git",
