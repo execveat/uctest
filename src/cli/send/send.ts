@@ -43,7 +43,7 @@ export function sendCommand() {
       'exchange'
     )
     .option('-s, --silent', 'log only request')
-    .option('--prune-refs', 'only execute leaf requests (prune referenced dependencies)')
+    .option('-a, --all', 'run all requests including referenced dependencies (default: optimize with prune-refs)')
     .option('--no-cache', 'skip cache, always rebuild dependency model')
     .option('--show-plan', 'print execution plan without running')
     .option('-r, --resume', 'resume from last failed request')
@@ -130,7 +130,7 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
         console.error('No tests match the specified filters');
         process.exit(1);
       }
-      if (options.pruneRefs) {
+      if (!options.all) {
         await executeWithOptimizer(
           httpFiles,
           httpFileStore,

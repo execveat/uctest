@@ -14,7 +14,7 @@ export interface SendOptions {
     timeout?: number;
     var?: Array<string>;
     verbose?: boolean;
-    pruneRefs?: boolean;
+    all?: boolean;
     resume?: boolean;
     stateFile?: string;
     noCache?: boolean;
