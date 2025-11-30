@@ -22,6 +22,7 @@ import {
 } from './optimizer';
 import { getLogLevel, OutputType, SendOptions } from './options';
 import { createCliPluginRegister } from './plugin';
+import { TestProgressBar, shouldShowProgressBar } from './progressBar';
 import { SelectActionResult, selectHttpFiles } from './selectHttpFiles';
 import { createEmptyProcessorContext } from '../../httpYacApi';
 
@@ -147,6 +148,10 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
       const totalRequests = totals.totalRequests;
       const totalFiles = totals.totalFiles;
 
+      // Progress bar setup
+      const showProgress = shouldShowProgressBar(options);
+      const progressBar = new TestProgressBar(totalRequests, showProgress);
+
       let emittedRequests = 0;
       const emitJsonLine = options.jsonl ? createJsonlEmitter() : undefined;
 
@@ -165,21 +170,31 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
             request: toSendOutputRequest(processedHttpRegion, options),
           });
         };
+      } else if (showProgress) {
+        // Progress bar mode: track progress and suppress verbose output
+        context.processedHttpRegionListener = processedHttpRegion => {
+          progressBar.update(processedHttpRegion);
+        };
       } else {
         context.processedHttpRegionListener = undefined;
       }
       context.processedHttpRegions = [];
 
+      progressBar.start();
+
       const sendFuncs = selection.map(
         ({ httpFile, httpRegions }) =>
           async function sendHttpFile() {
-            if (!options.json && context.scriptConsole) {
+            // Only show file headers in verbose mode (not progress bar mode)
+            if (!options.json && !showProgress && context.scriptConsole) {
               context.scriptConsole.info(`--------------------- ${httpFile.fileName}  --`);
             }
             await send(Object.assign({}, context, { httpFile, httpRegions }));
           }
       );
       await utils.promiseQueue(1, ...sendFuncs);
+
+      progressBar.stop();
 
       const processedHttpRegions = context.processedHttpRegions || [];
       const firstFailed =
@@ -481,6 +496,10 @@ async function executeWithOptimizer(
   const totalRequests = plan.stats.totalRegions;
   const totalFiles = countFilesInPlan(plan, model);
 
+  // Progress bar setup
+  const showProgress = shouldShowProgressBar(options);
+  const progressBar = new TestProgressBar(totalRequests, showProgress);
+
   let emittedRequests = 0;
   const emitJsonLine = options.jsonl ? createJsonlEmitter() : undefined;
 
@@ -499,11 +518,21 @@ async function executeWithOptimizer(
         request: toSendOutputRequest(processedHttpRegion, options),
       });
     };
+  } else if (showProgress) {
+    // Progress bar mode: track progress
+    context.processedHttpRegionListener = processedHttpRegion => {
+      progressBar.update(processedHttpRegion);
+    };
   } else {
     context.processedHttpRegionListener = undefined;
   }
 
-  await executeOptimizedPlan(plan, model, httpFiles, context, { resumeState });
+  progressBar.start();
+
+  // Pass showProgress flag to executor to suppress file headers
+  await executeOptimizedPlan(plan, model, httpFiles, context, { resumeState, showProgress });
+
+  progressBar.stop();
 
   const processedHttpRegions = context.processedHttpRegions || [];
   const firstFailed = options.resume && bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;

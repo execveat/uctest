@@ -5,6 +5,7 @@ import { DependencyModel, ExecutionPlan, ResumeState } from './types';
 export interface ExecuteOptions {
     resumeState?: ResumeState;
     showPlan?: boolean;
+    showProgress?: boolean;
 }
 export interface ExecutionRuntime {
     createProcessorContext: typeof createEmptyProcessorContext;

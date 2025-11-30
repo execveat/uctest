@@ -8,6 +8,7 @@ import { DependencyModel, ExecutionPlan, ResumeState } from './types';
 export interface ExecuteOptions {
   resumeState?: ResumeState;
   showPlan?: boolean;
+  showProgress?: boolean;
 }
 
 export interface ExecutionRuntime {
@@ -62,11 +63,14 @@ export async function executePlan(
       }
 
         // Print file header (matching normal execution path output)
-        const fileName = mapping.httpFile.fileName;
-        const fileKey = typeof fileName === 'string' ? fileName : fileName?.toString?.() || '';
-        if (!printedFileHeaders.has(fileKey) && (context as any).scriptConsole) {
-          (context as any).scriptConsole.info(`--------------------- ${fileKey}  --`);
-          printedFileHeaders.add(fileKey);
+        // Only show in verbose mode (not progress bar mode)
+        if (!options.showProgress) {
+          const fileName = mapping.httpFile.fileName;
+          const fileKey = typeof fileName === 'string' ? fileName : fileName?.toString?.() || '';
+          if (!printedFileHeaders.has(fileKey) && (context as any).scriptConsole) {
+            (context as any).scriptConsole.info(`--------------------- ${fileKey}  --`);
+            printedFileHeaders.add(fileKey);
+          }
         }
 
         await executeGlobalsForFile(mapping.entry.file, model, httpFileByPath, context, runtime, executedGlobals);
@@ -177,7 +181,12 @@ async function executeGlobalsForFile(
   runtime: ExecutionRuntime,
   executedGlobals: Set<string>
 ) {
-  if (executedGlobals.has(filePath)) {
+  // Track globals per (file, environment) tuple to support multi-environment execution
+  // (e.g., running v301 and v302 tests together where common.http needs different env vars)
+  const envKey = utils.toEnvironmentKey(context.activeEnvironment);
+  const globalsKey = `${filePath}::${envKey}`;
+
+  if (executedGlobals.has(globalsKey)) {
     return;
   }
 
@@ -204,7 +213,6 @@ async function executeGlobalsForFile(
   };
 
   await runtime.executeGlobalScripts(fileContext);
-  const envKey = utils.toEnvironmentKey(context.activeEnvironment);
   try {
     if (Array.isArray(httpFile.globalHttpRegions)) {
       for (const region of httpFile.globalHttpRegions) {
@@ -224,7 +232,7 @@ async function executeGlobalsForFile(
       ...fileContext.variables,
     };
   }
-  executedGlobals.add(filePath);
+  executedGlobals.add(globalsKey);
 }
 
 function matchesResumeTarget(region: models.HttpRegion, httpFile: models.HttpFile, resume: ResumeState): boolean {
