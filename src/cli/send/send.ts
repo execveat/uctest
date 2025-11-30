@@ -200,8 +200,7 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
       progressBar.stop();
 
       const processedHttpRegions = context.processedHttpRegions || [];
-      const firstFailed =
-        options.resume && bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
+      const firstFailed = bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
 
       if (options.jsonl) {
         emittedRequests = emitRemainingJsonLines(
@@ -219,15 +218,17 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
           summary: cliJsonOutput.summary,
         });
       } else {
-        reportOutput(context, options);
+        reportOutput(context, options, { showFailureDetails: showProgress, bailEnabled });
       }
 
-      if (resumeStateFile && options.resume && bailEnabled) {
-        if (firstFailed) {
-          await saveResumeState(resumeStateFile, firstFailed);
-        } else {
-          await clearResumeState(resumeStateFile);
-        }
+      // Auto-save resume state on failure (even without --resume flag)
+      // This allows users to easily resume with `uctest --resume` after a failure
+      const stateFile = options.stateFile || join(process.cwd(), '.uctest-state');
+      if (bailEnabled && firstFailed) {
+        await saveResumeState(stateFile, firstFailed);
+      } else if (options.resume) {
+        // Only clear state file if --resume was explicitly used and all tests passed
+        await clearResumeState(stateFile);
       }
     } else {
       console.error(`uctest cannot find any .http files matching: ${fileNames.join(', ')}`);
@@ -237,14 +238,29 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
   }
 }
 
-function reportOutput(context: Omit<models.HttpFileSendContext, 'httpFile'>, options: SendOptions) {
+interface ReportOptions {
+  showFailureDetails?: boolean;  // Show detailed error info (for progress bar mode failures)
+  bailEnabled?: boolean;         // Whether we're stopping on first failure
+}
+
+function reportOutput(
+  context: Omit<models.HttpFileSendContext, 'httpFile'>,
+  options: SendOptions,
+  reportOpts: ReportOptions = {}
+) {
   const processedHttpRegions = context.processedHttpRegions || [];
 
   const cliJsonOutput = toSendJsonOutput(processedHttpRegions, options);
   if (options.json) {
     console.info(utils.stringifySafe(cliJsonOutput, 2));
   } else if (context.scriptConsole) {
-    context.scriptConsole.info('');
+    // Show failure details in progress bar mode when tests fail (not in --keep-going mode)
+    const hasFailures = cliJsonOutput.summary.failedRequests > 0 || cliJsonOutput.summary.erroredRequests > 0;
+    if (reportOpts.showFailureDetails && hasFailures && reportOpts.bailEnabled) {
+      reportFailureDetails(processedHttpRegions, context.scriptConsole);
+    }
+
+    context.scriptConsole.info('---------------------');
 
     const requestCounts: Array<string> = [];
     if (cliJsonOutput.summary.successRequests > 0) {
@@ -263,6 +279,96 @@ function reportOutput(context: Omit<models.HttpFileSendContext, 'httpFile'>, opt
       chalk`{bold ${cliJsonOutput.summary.totalRequests}} requests processed (${requestCounts.join(', ')})`
     );
   }
+}
+
+/**
+ * Report detailed information about failed/errored tests.
+ * Called in progress bar mode when tests fail (and not using --keep-going).
+ */
+function reportFailureDetails(
+  processedHttpRegions: Array<models.ProcessedHttpRegion>,
+  console: models.ConsoleLogHandler
+) {
+  const failed = processedHttpRegions.filter(region =>
+    region.testResults?.some(
+      t => t.status === models.TestResultStatus.ERROR || t.status === models.TestResultStatus.FAILED
+    )
+  );
+
+  if (failed.length === 0) return;
+
+  console.info('');
+  console.info(chalk.red.bold('═══ Test Failure Details ═══'));
+
+  for (const region of failed) {
+    const fileName = fileProvider.fsPath(region.filename) || fileProvider.toString(region.filename);
+    const relPath = isAbsolute(fileName) ? relative(process.cwd(), fileName) : fileName;
+    const name = utils.toString(region.metaData?.name) || region.symbol?.name || 'unnamed';
+    const line = region.symbol?.startLine;
+
+    console.info('');
+    console.info(chalk.red(`✗ ${name}`));
+    console.info(chalk.gray(`  ${relPath}${line ? `:${line}` : ''}`));
+
+    // Show request info if available
+    if (region.request) {
+      const method = region.request.method || 'GET';
+      const url = region.request.url || '';
+      console.info(chalk.cyan(`  → ${method} ${url}`));
+    }
+
+    // Show response status if available
+    if (region.response) {
+      const status = region.response.statusCode;
+      const statusColor = status && status >= 400 ? chalk.red : chalk.green;
+      console.info(`  ← ${statusColor(status)} ${region.response.statusMessage || ''}`);
+    }
+
+    // Show test results
+    const failedTests = region.testResults?.filter(
+      t => t.status === models.TestResultStatus.ERROR || t.status === models.TestResultStatus.FAILED
+    ) || [];
+
+    for (const test of failedTests) {
+      const icon = test.status === models.TestResultStatus.ERROR ? '⚠' : '✗';
+      const color = test.status === models.TestResultStatus.ERROR ? chalk.yellow : chalk.red;
+
+      console.info(color(`  ${icon} ${test.message}`));
+
+      // Show error details if available
+      if (test.error) {
+        if (test.error.displayMessage && test.error.displayMessage !== test.message) {
+          console.info(chalk.gray(`    ${test.error.displayMessage}`));
+        }
+        if (test.error.file && test.error.line) {
+          console.info(chalk.gray(`    at ${test.error.file}:${test.error.line}`));
+        }
+      }
+    }
+
+    // Show response body snippet for debugging (if available and not too large)
+    if (region.response?.body && failedTests.length > 0) {
+      const body = typeof region.response.body === 'string'
+        ? region.response.body
+        : JSON.stringify(region.response.body, null, 2);
+      const maxLen = 500;
+      const truncated = body.length > maxLen ? body.slice(0, maxLen) + '...' : body;
+      if (truncated.trim()) {
+        console.info(chalk.gray('  Response body:'));
+        const lines = truncated.split('\n').slice(0, 10);
+        for (const bodyLine of lines) {
+          console.info(chalk.gray(`    ${bodyLine}`));
+        }
+        if (body.split('\n').length > 10) {
+          console.info(chalk.gray('    ...'));
+        }
+      }
+    }
+  }
+
+  console.info('');
+  console.info(chalk.gray('Resume state saved. Run with --resume (-r) to restart from the failed test.'));
+  console.info('');
 }
 
 function emitRemainingJsonLines(
@@ -560,7 +666,7 @@ async function executeWithOptimizer(
   progressBar.stop();
 
   const processedHttpRegions = context.processedHttpRegions || [];
-  const firstFailed = options.resume && bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
+  const firstFailed = bailEnabled ? findFirstFailedRegion(processedHttpRegions) : undefined;
 
   if (options.jsonl) {
     emittedRequests = emitRemainingJsonLines(
@@ -578,15 +684,17 @@ async function executeWithOptimizer(
       summary: cliJsonOutput.summary,
     });
   } else {
-    reportOutput(context, options);
+    reportOutput(context, options, { showFailureDetails: showProgress, bailEnabled });
   }
 
-  if (resumeStateFile && options.resume && bailEnabled) {
-    if (firstFailed) {
-      await saveResumeState(resumeStateFile, firstFailed);
-    } else {
-      await clearResumeState(resumeStateFile);
-    }
+  // Auto-save resume state on failure (even without --resume flag)
+  // This allows users to easily resume with `uctest --resume` after a failure
+  const stateFile = resumeStateFile || options.stateFile || join(process.cwd(), '.uctest-state');
+  if (bailEnabled && firstFailed) {
+    await saveResumeState(stateFile, firstFailed);
+  } else if (options.resume) {
+    // Only clear state file if --resume was explicitly used and all tests passed
+    await clearResumeState(stateFile);
   }
 }
 
