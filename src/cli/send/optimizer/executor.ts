@@ -40,6 +40,7 @@ export async function executePlan(
   const httpFileByPath = buildFileLookup(httpFiles, model.rootDir);
   const executedGlobals = new Set<string>();
   const executedRegions = new Set<string>();
+  const printedFileHeaders = new Set<string>();
   const results: models.ProcessedHttpRegion[] = [];
   let seeking = !!options.resumeState;
 
@@ -60,6 +61,14 @@ export async function executePlan(
         }
       }
 
+        // Print file header (matching normal execution path output)
+        const fileName = mapping.httpFile.fileName;
+        const fileKey = typeof fileName === 'string' ? fileName : fileName?.toString?.() || '';
+        if (!printedFileHeaders.has(fileKey) && (context as any).scriptConsole) {
+          (context as any).scriptConsole.info(`--------------------- ${fileKey}  --`);
+          printedFileHeaders.add(fileKey);
+        }
+
         await executeGlobalsForFile(mapping.entry.file, model, httpFileByPath, context, runtime, executedGlobals);
 
         const processorContext: models.ProcessorContext = {
@@ -68,6 +77,10 @@ export async function executePlan(
           httpRegion: mapping.httpRegion,
           variables: context.variables || {},
           options: context.options || {},
+          // Explicitly preserve logging fields that may be lost in type casting
+          scriptConsole: (context as any).scriptConsole,
+          logResponse: (context as any).logResponse,
+          logStream: (context as any).logStream,
         };
 
         const start = performance.now();
@@ -177,12 +190,19 @@ async function executeGlobalsForFile(
   if (!httpFile) {
     throw new Error(`HTTP file not loaded for ${filePath}`);
   }
-  const fileContext = await runtime.createProcessorContext({
-    ...context,
+
+  // DON'T use createProcessorContext - it reloads .env and overwrites parent variables!
+  // Instead, create a minimal context that INHERITS the parent's variables.
+  // This ensures imported files (like common.http) receive the importer's environment.
+  const fileContext: models.ProcessorContext = {
+    ...(context as models.ProcessorContext),
     httpFile,
+    httpRegion: httpFile.httpRegions[0] || ({} as models.HttpRegion), // Placeholder for global context
+    variables: context.variables || {}, // INHERIT parent variables - don't reload .env
+    options: context.options || {},
     processedHttpRegions: [],
-    processedHttpRegionListener: undefined,
-  } as models.HttpFileSendContext);
+  };
+
   await runtime.executeGlobalScripts(fileContext);
   const envKey = utils.toEnvironmentKey(context.activeEnvironment);
   try {
@@ -197,6 +217,7 @@ async function executeGlobalsForFile(
   } catch (err) {
     // Ignore variable propagation issues from globals; execution will proceed with already merged variables
   }
+  // Propagate any new variables set by the globals back to the parent context
   if (fileContext.variables) {
     context.variables = {
       ...(context.variables || {}),

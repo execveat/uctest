@@ -452,14 +452,26 @@ async function executeWithOptimizer(
 
   context.options = { ...(context.options || {}), skipRefResolution: true };
   context.processedHttpRegions = [];
-  // Preload environment variables once to ensure globals have access before execution
-  if (httpFiles.length > 0) {
-    const preload = await createEmptyProcessorContext({
-      ...(context as models.HttpFileSendContext),
-      httpFile: httpFiles[0],
-    });
-    if (preload.variables) {
-      context.variables = { ...(context.variables || {}), ...preload.variables };
+
+  // Preload environment variables from the first REQUESTED region's file
+  // (not httpFiles[0] which could be any file in glob order, like common.http)
+  // This ensures we load .env from the correct directory (e.g., v301/.env for @v301 tests)
+  const firstRequestedRegionId = plan.requestedRegionIds[0] || plan.stages[0]?.units[0]?.regionIds[0];
+  if (firstRequestedRegionId) {
+    const firstRegion = model.regions[firstRequestedRegionId];
+    if (firstRegion) {
+      const httpFile = httpFiles.find(f =>
+        normalizeRelativePath(f.fileName, model.rootDir) === firstRegion.file
+      );
+      if (httpFile) {
+        const preload = await createEmptyProcessorContext({
+          ...(context as models.HttpFileSendContext),
+          httpFile,
+        });
+        if (preload.variables) {
+          context.variables = { ...(context.variables || {}), ...preload.variables };
+        }
+      }
     }
   }
 
