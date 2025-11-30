@@ -148,9 +148,12 @@ async function execute(args: Array<string>, options: SendOptions): Promise<void>
       const totalRequests = totals.totalRequests;
       const totalFiles = totals.totalFiles;
 
-      // Progress bar setup
+      // Get user-selected region IDs for progress tracking
+      const requestedRegionIds = getRequestedRegionIds(selection);
+
+      // Progress bar setup - tracks user-selected tests, not total HTTP requests
       const showProgress = shouldShowProgressBar(options);
-      const progressBar = new TestProgressBar(totalRequests, showProgress);
+      const progressBar = new TestProgressBar({ requestedRegionIds }, showProgress);
 
       let emittedRequests = 0;
       const emitJsonLine = options.jsonl ? createJsonlEmitter() : undefined;
@@ -368,6 +371,24 @@ function selectionToRegionIds(selection: SelectActionResult): Array<string> {
   return ids;
 }
 
+/**
+ * Get the IDs of user-selected regions (from CLI filters: path, tags, names).
+ * This is the set of tests the user explicitly requested, before dependency expansion.
+ */
+function getRequestedRegionIds(selection: SelectActionResult): Set<string> {
+  const ids = new Set<string>();
+  for (const { httpFile, httpRegions } of selection) {
+    const regions = httpRegions ?? httpFile.httpRegions;
+    for (const region of regions) {
+      if (region.metaData?.disabled === true || region.metaData?.skip || region.isGlobal()) {
+        continue;
+      }
+      ids.add(region.id);
+    }
+  }
+  return ids;
+}
+
 async function ensureHttpFilesForPlan(
   plan: ExecutionPlan,
   model: DependencyModel,
@@ -496,9 +517,13 @@ async function executeWithOptimizer(
   const totalRequests = plan.stats.totalRegions;
   const totalFiles = countFilesInPlan(plan, model);
 
-  // Progress bar setup
+  // Get user-selected region IDs for progress tracking
+  // plan.requestedRegionIds contains exactly the tests user selected via CLI filters
+  const requestedRegionIds = new Set(plan.requestedRegionIds);
+
+  // Progress bar setup - tracks user-selected tests, not total HTTP requests
   const showProgress = shouldShowProgressBar(options);
-  const progressBar = new TestProgressBar(totalRequests, showProgress);
+  const progressBar = new TestProgressBar({ requestedRegionIds }, showProgress);
 
   let emittedRequests = 0;
   const emitJsonLine = options.jsonl ? createJsonlEmitter() : undefined;

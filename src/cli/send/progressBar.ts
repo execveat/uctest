@@ -9,21 +9,39 @@ export interface ProgressStats {
   skipped: number;
 }
 
+export interface ProgressConfig {
+  /** IDs of user-selected tests (from CLI filters: path, tags, names) */
+  requestedRegionIds: Set<string>;
+}
+
+/**
+ * Progress bar that tracks completion of user-selected tests.
+ *
+ * The key metric is: how many of the tests that the user explicitly selected
+ * (via path, @tag, or :name filters) have been executed?
+ *
+ * This is independent of dependency resolution - if running test X requires
+ * also running A, B, C as dependencies, the progress bar shows 1/1 test
+ * (the user's selection), not 4/4 HTTP requests.
+ */
 export class TestProgressBar {
   private bar: cliProgress.SingleBar | null = null;
   private stats: ProgressStats = { success: 0, failed: 0, errored: 0, skipped: 0 };
-  private current = 0;
+  private requestedCompleted = 0;
+  private seenRequested = new Set<string>(); // Dedupe user-selected tests
+  private seenAll = new Set<string>(); // Dedupe all HTTP requests
 
   constructor(
-    private totalRequests: number,
+    private config: ProgressConfig,
     private enabled: boolean
   ) {}
 
   start() {
     if (!this.enabled) return;
 
+    const total = this.config.requestedRegionIds.size;
     this.bar = new cliProgress.SingleBar({
-      format: 'Testing... {bar} {percentage}% | {value}/{total} | {stats}',
+      format: 'Testing... {bar} {percentage}% | {requested}/{totalRequested} tests | {stats}',
       barCompleteChar: '\u2588',
       barIncompleteChar: '\u2591',
       hideCursor: true,
@@ -31,13 +49,41 @@ export class TestProgressBar {
       stopOnComplete: false,
     });
 
-    this.bar.start(this.totalRequests, 0, { stats: chalk.gray('starting...') });
+    this.bar.start(total, 0, {
+      requested: 0,
+      totalRequested: total,
+      stats: chalk.gray('starting...'),
+    });
   }
 
   update(processedRegion: ProcessedHttpRegion) {
     if (!this.bar) return;
 
-    // Count test results
+    // Count all HTTP requests (dedupe by region ID)
+    if (!this.seenAll.has(processedRegion.id)) {
+      this.seenAll.add(processedRegion.id);
+      this.updateStats(processedRegion);
+    }
+
+    // Track user-selected test completion (dedupe)
+    if (this.config.requestedRegionIds.has(processedRegion.id)) {
+      if (!this.seenRequested.has(processedRegion.id)) {
+        this.seenRequested.add(processedRegion.id);
+        this.requestedCompleted++;
+        this.bar.update(this.requestedCompleted, {
+          requested: this.requestedCompleted,
+          stats: this.formatStats(),
+        });
+      }
+    } else {
+      // Update stats display for dependency regions too
+      this.bar.update(this.requestedCompleted, {
+        stats: this.formatStats(),
+      });
+    }
+  }
+
+  private updateStats(processedRegion: ProcessedHttpRegion) {
     const results = processedRegion.testResults || [];
     const hasError = results.some(t => t.status === TestResultStatus.ERROR);
     const hasFailed = results.some(t => t.status === TestResultStatus.FAILED);
@@ -47,9 +93,6 @@ export class TestProgressBar {
     else if (hasFailed) this.stats.failed++;
     else if (hasSkipped) this.stats.skipped++;
     else this.stats.success++;
-
-    this.current++;
-    this.bar.update(this.current, { stats: this.formatStats() });
   }
 
   stop() {
@@ -60,6 +103,10 @@ export class TestProgressBar {
 
   getStats(): ProgressStats {
     return { ...this.stats };
+  }
+
+  getTotalExecuted(): number {
+    return this.seenAll.size;
   }
 
   private formatStats(): string {

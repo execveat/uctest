@@ -5,17 +5,35 @@ export interface ProgressStats {
     errored: number;
     skipped: number;
 }
+export interface ProgressConfig {
+    /** IDs of user-selected tests (from CLI filters: path, tags, names) */
+    requestedRegionIds: Set<string>;
+}
+/**
+ * Progress bar that tracks completion of user-selected tests.
+ *
+ * The key metric is: how many of the tests that the user explicitly selected
+ * (via path, @tag, or :name filters) have been executed?
+ *
+ * This is independent of dependency resolution - if running test X requires
+ * also running A, B, C as dependencies, the progress bar shows 1/1 test
+ * (the user's selection), not 4/4 HTTP requests.
+ */
 export declare class TestProgressBar {
-    private totalRequests;
+    private config;
     private enabled;
     private bar;
     private stats;
-    private current;
-    constructor(totalRequests: number, enabled: boolean);
+    private requestedCompleted;
+    private seenRequested;
+    private seenAll;
+    constructor(config: ProgressConfig, enabled: boolean);
     start(): void;
     update(processedRegion: ProcessedHttpRegion): void;
+    private updateStats;
     stop(): void;
     getStats(): ProgressStats;
+    getTotalExecuted(): number;
     private formatStats;
 }
 export interface ProgressBarOptions {

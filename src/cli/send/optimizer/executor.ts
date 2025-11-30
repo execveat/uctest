@@ -100,8 +100,9 @@ export async function executePlan(
         } else {
           processedRegion = toProcessedHttpRegion(mapping.httpRegion, mapping.httpFile, start);
           processed.push(processedRegion);
-          context.processedHttpRegionListener?.(processedRegion);
         }
+        // Always call listener - progress bar handles deduplication
+        context.processedHttpRegionListener?.(processedRegion);
         results.push(processedRegion);
 
         if (!ok) {
